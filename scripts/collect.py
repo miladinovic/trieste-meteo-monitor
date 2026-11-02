@@ -9,7 +9,8 @@ DATA = ROOT / 'site' / 'data'
 BASE = 'https://monitor.protezionecivile.fvg.it/api'
 START = date(2023, 1, 1)
 TODAY = datetime.now(timezone.utc).date()
-BUDGET = int(os.getenv('FVG_BACKFILL_REQUESTS', '28'))
+BUDGET = int(os.getenv('FVG_BACKFILL_REQUESTS', '80'))
+ALLOWED = {'T', 'U', 'P_1h', 'B', 'Vv', 'VvMax'}
 # Seed IDs ensure useful data even if station discovery is temporarily unavailable.
 SEED = [212, 191, 625, 502, 504]
 
@@ -107,6 +108,28 @@ def store(sid, sensor, rows):
         old.update(entries)
         write(path, dict(sorted(old.items())))
 
+def build_rain_comparison(sensors):
+    """Precompute monthly rainfall totals, with coverage metadata, from hourly increments."""
+    result = {'generated_at': datetime.now(timezone.utc).isoformat(), 'stations': {}}
+    for sid, items in sensors.items():
+        rain = next((x for x in items if x.get('code') == 'P_1h'), None)
+        if not rain: continue
+        months = {}
+        for year in range(START.year, TODAY.year + 1):
+            observations = read(DATA / 'history' / sid / str(rain['id']) / f'{year}.json', {})
+            for stamp, value in observations.items():
+                try:
+                    key = stamp[:7]
+                    bucket = months.setdefault(key, {'total': 0.0, 'observations': 0, 'first': stamp, 'last': stamp})
+                    bucket['total'] += float(value)
+                    bucket['observations'] += 1
+                    bucket['first'] = min(bucket['first'], stamp)
+                    bucket['last'] = max(bucket['last'], stamp)
+                except (ValueError, TypeError): continue
+        for bucket in months.values(): bucket['total'] = round(bucket['total'], 3)
+        result['stations'][sid] = {'sensor_id': rain['id'], 'months': months}
+    write(DATA / 'rainfall_monthly.json', result)
+
 def main():
     DATA.mkdir(parents=True, exist_ok=True)
     stations = station_list()
@@ -115,16 +138,16 @@ def main():
     state = read(state_path, {'cursors': {}, 'last_updated': None})
     cursors = state.setdefault('cursors', {})
     pairs = [(int(s['id']), int(x['id'])) for s in stations for x in sensors.get(str(s['id']), [])
-             if x.get('id') is not None and x.get('status') in ('O', None, 'N')]
+             if x.get('id') is not None and x.get('status') in ('O', None, 'N') and x.get('code') in ALLOWED]
     # Download recent observations FIRST so the website has data on the first run.
     # Rotate through all sensors; prioritize common weather sensors.
-    primary = {'T', 'U', 'P_1h', 'B', 'Vv', 'VvMax', 'Dv'}
+    primary = ALLOWED
     sensor_codes = {(int(st['id']), int(s['id'])): s.get('code', '')
                     for st in stations for s in sensors.get(str(st['id']), [])
                     if s.get('id') is not None}
     recent_pairs = sorted(pairs, key=lambda p: (sensor_codes.get(p) not in primary,
                                                 p[0] != 504, p[0], p[1]))
-    recent_budget = max(1, int(os.getenv('FVG_RECENT_REQUESTS', '30')))
+    recent_budget = max(1, int(os.getenv('FVG_RECENT_REQUESTS', '35')))
     failures = []
     recent_calls = 0
     if recent_pairs:
@@ -142,7 +165,7 @@ def main():
                 if 'limit' in str(exc).lower() or '429' in str(exc): break
         state['recent_index'] = (cursor + max(1, recent_calls)) % len(recent_pairs)
 
-    # Slowly backfill from 2023, with one resumable week per sensor and run.
+    # Backfill from 2023 in 14-day windows; prioritize earliest incomplete periods.
     # No API calls are made by the browser itself.
     pairs.sort(key=lambda p: (cursors.get(f'{p[0]}:{p[1]}', str(START)),
                               sensor_codes.get(p) not in primary, p[0] != 504, p[0], p[1]))
@@ -152,7 +175,7 @@ def main():
         key = f'{sid}:{sensor}'
         begin = date.fromisoformat(cursors.get(key, str(START)))
         if begin > TODAY: continue
-        finish = min(begin + timedelta(days=7), TODAY + timedelta(days=1))
+        finish = min(begin + timedelta(days=14), TODAY + timedelta(days=1))
         try:
             rows = fetch_window(sid, sensor, begin, finish)
             store(sid, sensor, rows)
@@ -169,6 +192,7 @@ def main():
     state['recent_window_days'] = 2
     state['errors'] = failures[:12]
     write(state_path, state)
+    build_rain_comparison(sensors)
     print('Backfill windows:', calls, 'Sensors:', len(pairs), 'Errors:', len(failures))
 
 if __name__ == '__main__': main()
