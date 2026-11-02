@@ -116,10 +116,37 @@ def main():
     cursors = state.setdefault('cursors', {})
     pairs = [(int(s['id']), int(x['id'])) for s in stations for x in sensors.get(str(s['id']), [])
              if x.get('id') is not None and x.get('status') in ('O', None, 'N')]
-    # Refresh last 2 days for each pair over successive runs; do not exhaust budget.
-    # Backfill proceeds one 7-day window per pair per pass, persisted across runs.
-    pairs.sort(key=lambda p: (cursors.get(f'{p[0]}:{p[1]}', str(START)), p[0], p[1]))
-    calls = 0; failures = []
+    # Download recent observations FIRST so the website has data on the first run.
+    # Rotate through all sensors; prioritize common weather sensors.
+    primary = {'T', 'U', 'P_1h', 'B', 'Vv', 'VvMax', 'Dv'}
+    sensor_codes = {(int(st['id']), int(s['id'])): s.get('code', '')
+                    for st in stations for s in sensors.get(str(st['id']), [])
+                    if s.get('id') is not None}
+    recent_pairs = sorted(pairs, key=lambda p: (sensor_codes.get(p) not in primary,
+                                                p[0] != 504, p[0], p[1]))
+    recent_budget = max(1, int(os.getenv('FVG_RECENT_REQUESTS', '30')))
+    failures = []
+    recent_calls = 0
+    if recent_pairs:
+        # First run begins with the important sensors; later runs rotate.
+        cursor = int(state.get('recent_index', 0)) % len(recent_pairs)
+        for i in range(min(recent_budget, len(recent_pairs))):
+            sid, sensor = recent_pairs[(cursor + i) % len(recent_pairs)]
+            try:
+                rows = fetch_window(sid, sensor, TODAY - timedelta(days=3), TODAY + timedelta(days=1))
+                store(sid, sensor, rows)
+                recent_calls += 1
+            except Exception as exc:
+                failures.append(f'recent {sid}:{sensor}: {exc}')
+                print('Recent error', sid, sensor, exc)
+                if 'limit' in str(exc).lower() or '429' in str(exc): break
+        state['recent_index'] = (cursor + max(1, recent_calls)) % len(recent_pairs)
+
+    # Slowly backfill from 2023, with one resumable week per sensor and run.
+    # No API calls are made by the browser itself.
+    pairs.sort(key=lambda p: (cursors.get(f'{p[0]}:{p[1]}', str(START)),
+                              sensor_codes.get(p) not in primary, p[0] != 504, p[0], p[1]))
+    calls = 0
     for sid, sensor in pairs:
         if calls >= BUDGET: break
         key = f'{sid}:{sensor}'
@@ -134,25 +161,10 @@ def main():
         except Exception as exc:
             failures.append(f'{key}: {exc}')
             print('Backfill error', key, exc)
-            # Don't repeatedly burn requests if the API is rate-limiting.
             if 'limit' in str(exc).lower() or '429' in str(exc): break
-    # Update recent measurements, rotating through sensors with a separate cursor.
-    recent_budget = int(os.getenv('FVG_RECENT_REQUESTS', '12'))
-    if pairs:
-        cursor = int(state.get('recent_index', 0)) % len(pairs)
-        for i in range(min(recent_budget, len(pairs))):
-            sid, sensor = pairs[(cursor + i) % len(pairs)]
-            try:
-                begin = TODAY - timedelta(days=2)
-                rows = fetch_window(sid, sensor, begin, TODAY + timedelta(days=1))
-                store(sid, sensor, rows)
-            except Exception as exc:
-                failures.append(f'recent {sid}:{sensor}: {exc}')
-                print('Recent error', sid, sensor, exc)
-                if 'limit' in str(exc).lower() or '429' in str(exc): break
-        state['recent_index'] = (cursor + recent_budget) % len(pairs)
     state['last_updated'] = datetime.now(timezone.utc).isoformat()
     state['last_attempts'] = calls
+    state['recent_downloads'] = recent_calls
     state['sensor_count'] = len(pairs)
     state['recent_window_days'] = 2
     state['errors'] = failures[:12]
