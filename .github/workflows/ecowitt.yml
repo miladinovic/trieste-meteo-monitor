@@ -1,0 +1,62 @@
+name: Update Ecowitt Roiano
+
+on:
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ecowitt-data-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ECOWITT_APPLICATION_KEY: ${{ secrets.ECOWITT_APPLICATION_KEY }}
+      ECOWITT_API_KEY: ${{ secrets.ECOWITT_API_KEY }}
+      ECOWITT_DEVICE_MAC: ${{ vars.ECOWITT_DEVICE_MAC }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate configuration
+        shell: bash
+        run: |
+          test -n "$ECOWITT_APPLICATION_KEY" || { echo 'Missing ECOWITT_APPLICATION_KEY secret'; exit 1; }
+          test -n "$ECOWITT_API_KEY" || { echo 'Missing ECOWITT_API_KEY secret'; exit 1; }
+          test -n "$ECOWITT_DEVICE_MAC" || { echo 'Missing ECOWITT_DEVICE_MAC variable'; exit 1; }
+      - name: Download last 3 UTC days (overlap for delayed readings)
+        shell: bash
+        run: |
+          START=$(date -u -d '2 days ago' +%F)
+          END=$(date -u +%F)
+          python3 scripts/ecowitt_local.py --start "$START" --end "$END" --delay 0.5
+      - name: Commit Ecowitt observations only
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add site/data/ecowitt/
+          if git diff --cached --quiet; then
+            echo 'No Ecowitt changes.'
+            exit 0
+          fi
+          git commit -m 'Update Ecowitt Roiano observations'
+          # Retry on concurrent updates; rerun the collector on a future schedule if this fails.
+          for attempt in 1 2 3; do
+            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((attempt * 3))
+          done
+          echo 'Push failed: retry with workflow_dispatch after reviewing conflicts.' >&2
+          exit 1
