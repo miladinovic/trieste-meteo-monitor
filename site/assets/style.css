@@ -28,3 +28,6 @@
  .info{padding:14px}
 }
 @media(max-width:360px){.stats{grid-template-columns:1fr 1fr}.stats:not(.temperature-extremes) .card:last-child{grid-column:1/-1}}
+
+/* Let finger swipes scroll the page naturally on phones. */
+@media (max-width:600px){#chart,#rain-comparison{touch-action:pan-y pinch-zoom}}
