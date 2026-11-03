@@ -31,3 +31,5 @@
 
 /* Let finger swipes scroll the page naturally on phones. */
 @media (max-width:600px){#chart,#rain-comparison{touch-action:pan-y pinch-zoom}}
+
+@media(max-width:600px){#chart .js-plotly-plot,#rain-comparison .js-plotly-plot{touch-action:pan-y!important}}
