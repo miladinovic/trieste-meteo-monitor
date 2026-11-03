@@ -12,7 +12,7 @@ TODAY = datetime.now(timezone.utc).date()
 BUDGET = int(os.getenv('FVG_BACKFILL_REQUESTS', '80'))
 ALLOWED = {'T', 'U', 'P_1h', 'B', 'Vv', 'VvMax'}
 # Seed IDs ensure useful data even if station discovery is temporarily unavailable.
-SEED = [212, 191, 625, 502, 504]
+SEED = [212, 191, 504]
 
 def read(path, default):
     try: return json.loads(path.read_text(encoding='utf-8'))
@@ -44,7 +44,7 @@ def station_list():
     try:
         payload = get('/stations', {'last': 10000, 'offset': 0})
         for s in payload.get('stations', []):
-            if str(s.get('istat')) == '32006' and s.get('id') is not None:
+            if str(s.get('istat')) == '32006' and s.get('id') is not None and int(s['id']) not in (502,625):
                 by_id[int(s['id'])] = s
     except Exception as exc:
         print('Station discovery unavailable:', exc)
@@ -56,7 +56,7 @@ def station_list():
                 if isinstance(s, dict): by_id[sid] = s
             except Exception as exc: print('Station details unavailable', sid, exc)
     # Always retain known Trieste stations; additional ones must match ISTAT.
-    out = sorted((s for s in by_id.values() if str(s.get('istat', '32006')) == '32006'), key=lambda s: (s.get('name') or '', s['id']))
+    out = sorted((s for s in by_id.values() if str(s.get('istat', '32006')) == '32006' and int(s['id']) not in (502,625)), key=lambda s: (s.get('name') or '', s['id']))
     write(DATA / 'stations.json', out)
     return out
 

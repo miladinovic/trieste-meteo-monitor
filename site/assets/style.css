@@ -33,3 +33,5 @@
 @media (max-width:600px){#chart,#rain-comparison{touch-action:pan-y pinch-zoom}}
 
 @media(max-width:600px){#chart .js-plotly-plot,#rain-comparison .js-plotly-plot{touch-action:pan-y!important}}
+
+.compare-controls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:12px;align-items:end;margin:18px 0}.compare-controls label{display:flex;flex-direction:column;gap:6px;font-size:.8rem;font-weight:700}.compare-controls select{min-width:0;width:100%;min-height:44px;padding:9px;border:1px solid #cbdbe4;border-radius:9px;background:white}#compare-chart{width:100%;min-width:0}@media(max-width:650px){.compare-controls{grid-template-columns:repeat(2,minmax(0,1fr))}.compare-controls label:nth-child(3),.compare-controls button{grid-column:1/-1}}
