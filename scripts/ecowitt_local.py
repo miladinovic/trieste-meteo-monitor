@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'site'/'data'/'ecowitt'
 MAC=os.getenv('ECOWITT_DEVICE_MAC','7C:87:CE:B7:FF:52')
-FIELDS={'T':('outdoor','temperature'),'U':('outdoor','humidity'),'B':('pressure','relative'),'Vv':('wind','wind_speed'),'VvMax':('wind','wind_gust'),'P_1h':('rainfall','1_hour')}
+FIELDS={'T':('outdoor','temperature'),'U':('outdoor','humidity'),'B':('pressure','relative'),'Vv':('wind','wind_speed'),'VvMax':('wind','wind_gust')}
 # Ecowitt historic endpoint returns a dictionary keyed by UNIX timestamp for each sensor.
 API='https://api.ecowitt.net/api/v3/device/history'
 
@@ -60,29 +60,16 @@ def points(data,section,field):
  return out
 
 def rainfall_increments(data):
- """Extract Ecowitt rainfall.1_hour (rolling previous-hour total, mm).
-
- Retain only one reading per UTC clock hour, nearest to the hour boundary.
- A rolling 1-hour amount must NEVER be summed at 5-minute resolution.
- Values sampled at HH:00 represent the preceding hour (HH-1:00 to HH:00).
- """
- vals=points(data,'rainfall','1_hour')
- by_hour={}
- for stamp,value in vals.items():
-  try:
-   dt=datetime.fromisoformat(stamp).replace(tzinfo=timezone.utc)
-   # A reading near HH:00 describes the preceding 60 minutes.
-   boundary=dt.replace(minute=0,second=0,microsecond=0)
-   if dt.minute>=55:boundary+=timedelta(hours=1)
-   distance=abs((dt-boundary).total_seconds())
-   if distance>5*60:continue
-   key=boundary.strftime('%Y-%m-%d %H:%M:%S')
-   if key not in by_hour or distance<by_hour[key][0]:by_hour[key]=(distance,value)
-  except (ValueError,TypeError):continue
- return {key:val for key,(_,val) in by_hour.items()}
+ # Ecowitt 1_hour is rolling rainfall, NOT additive at 5-minute frequency.
+ # Preserve the existing hourly series for inspection only; daily totals are
+ # stored separately in P_daily by ecowitt_rainfall_only.py.
+ for section,field in [('rainfall','1_hour')]:
+  vals=points(data,section,field)
+  if vals:return vals
+ return {}
 
 def check():
- print('Ecowitt data audit (UTC timestamps; P_1h sampled once at each UTC hour boundary)')
+ print('Ecowitt data audit (UTC timestamps; rainfall requires hourly increments)')
  for code in FIELDS:
   total=0;first=last=None
   for p in sorted((OUT/code).glob('*.json')):
