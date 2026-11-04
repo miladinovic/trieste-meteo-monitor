@@ -39,6 +39,7 @@ jobs:
           START=$(date -u -d '2 days ago' +%F)
           END=$(date -u +%F)
           python3 scripts/ecowitt_local.py --start "$START" --end "$END" --delay 0.5
+          python3 scripts/ecowitt_rainfall_only.py --start "$START" --end "$END" --delay 0.5
       - name: Commit Ecowitt observations only
         shell: bash
         run: |
